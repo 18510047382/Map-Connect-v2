@@ -8,8 +8,8 @@ import actionCmdList from './../var/actionCmdList';
 import actionUnstableCmdList from './../var/actionUnstableCmdList';
 
 export default win => {
-    const client = new Client();
-    establishConnection(client, win);
+    const client = new Client(),
+        udpSocket = client.establishConnection(win);
 
     ipcMain.on("axis operation", (e, actionID, val) => {
         if (client.connected) {
@@ -22,6 +22,15 @@ export default win => {
         if (client.connected) {
             parseButtonAction(client, actionID, val);
         }
+    })
+
+    ipcMain.handle('connectToIP', async (e, ip) => {
+        console.log(ip);
+        resetClient(client);
+        udpSocket.close();
+        client.ipAddress = ip;
+        client.connectTo(win);
+        return true;
     })
 }
 
@@ -84,52 +93,30 @@ function parseAxisAction(client, actionID, val) {
     }
 }
 
-function establishConnection(client, win) {
-    client.establishConnection(() => {
-        win.webContents.send("connected");
-    }, (e) => {
-        client.isError = true;
-        clearInterval(client.retriveManifestTimer);
-        win.webContents.send("connect error", e);
-    }, () => {
-        if (client.isError || !client.connected) return;
-        win.webContents.send("lose connection");
-        client.connected = false;
-        clearInterval(client.retriveManifestTimer);
-        establishConnection(client, win);
-    })
+function resetClient(client) {
+    client.client = null;
+    client.ipAddress = "";
+    client.connected = false;
+    client.cmdList = {};
+    client.manifestStr = '';
+    client.totalManifestLen = 0;
+    client.curManifestLen = 0;
+    client.isGettingManifestDone = false;
+    client.retriveManifestTimer = null;
+    client.isFirstTimeGettingManifest = true;
 }
 
 class Client {
     constructor() {
-        this.client = null;
-        this.ipAddress = "";
-        this.connected = false;
-        this.isError = false;
-        this.cmdList = {};
-        this.manifestStr = '';
-        this.totalManifestLen = 0;
-        this.curManifestLen = 0;
-        this.isGettingManifestDone = false;
-        this.retriveManifestTimer = null;
-        this.isFirstTimeGettingManifest = true;
+        resetClient(this);
     }
 
     connect(client, ip, port) {
         return client.connect(parseInt(port), ip);
     }
 
-    establishConnection(success, error, close, logStatus = false) {
-        this.client = null;
-        this.ipAddress = "";
-        this.connected = false;
-        this.cmdList = {};
-        this.manifestStr = '';
-        this.totalManifestLen = 0;
-        this.curManifestLen = 0;
-        this.isGettingManifestDone = false;
-        this.retriveManifestTimer = null;
-        this.isFirstTimeGettingManifest = true;
+    establishConnection(win, logStatus = false) {
+        resetClient(this);
 
         let s = dgram.createSocket('udp4');
         s.bind(15000);
@@ -147,73 +134,101 @@ class Client {
             if (addr && response.Port) {
                 this.ipAddress = addr;
                 s.close();
+                this.connectTo(win);
+            }
+        }.bind(this));
 
-                const newSocket = new net.Socket();
-                newSocket.on('close', close);
-                this.client = new PromiseSocket(newSocket);
+        return s;
+    }
 
-                // Connect API V2
-                this.connect(this.client, this.ipAddress, 10112).then(async function () {
-                    // get manifest
-                    this.client.stream.on('data', chunk => {
-                        if (this.isGettingManifestDone || chunk.length < 12) return;
-                        if (chunk.slice(0, 4).equals(Buffer.from([0xff, 0xff, 0xff, 0xff]))) {
-                            this.manifestStr += this.parseResponseByType(chunk.slice(12), 4);
-                            this.totalManifestLen = parseInt(chunk.slice(8, 12).toString('hex').match(/.{2}/g).reverse().join(""), 16);
-                        } else {
-                            if (this.totalManifestLen === 0) {
-                                this.totalManifestLen = 0;
-                                this.curManifestLen = 0;
-                                this.isGettingManifestDone = false;
-                                this.retrieveManifest();
-                                return;
-                            }
-                            this.manifestStr += this.parseResponseByType(chunk, 4);
-                        }
-                        this.curManifestLen += chunk.length;
-                        this.isGettingManifestDone = true;
-                        for (let i in actionCmdList) {
-                            console.log(actionCmdList[i], this.manifestStr.includes(actionCmdList[i]));
-                            if (!this.manifestStr.includes(actionCmdList[i])) {
-                                this.isGettingManifestDone = false;
-                                break;
-                            }
-                        }
-                        if (!this.isGettingManifestDone && (this.curManifestLen - 12) >= this.totalManifestLen) {
-                            this.totalManifestLen = 0;
-                            this.curManifestLen = 0;
-                            this.isGettingManifestDone = false;
-                            this.retrieveManifest();
-                            return;
-                        }
-                        if (this.isGettingManifestDone) {
-                            // call generate cmdList fn
-                            console.log('done');
-                            this.generateCmdList();
-                            if (this.isFirstTimeGettingManifest) {
-                                this.connected = true;
-                                success();
-                                this.isFirstTimeGettingManifest = false;
-                            }
-                        }
-                    })
+    connectTo(win) {
+        const success = () => {
+            win.webContents.send("connected");
+        },
+            error = e => {
+                this.isError = true;
+                clearInterval(this.retriveManifestTimer);
+                console.log(e);
+                switch (e.code) {
+                    case 'ETIMEDOUT':
+                        win.webContents.send("connect error", 'Map Connect cannot connect to IP:' + e.address + ', please enter IP address manually.');
+                        break;
+                    default:
+                        win.webContents.send("connect error", e);
+                }
+            },
+            close = () => {
+                if (this.isError || !this.connected) return;
+                win.webContents.send("lose connection");
+                this.connected = false;
+                clearInterval(this.retriveManifestTimer);
+                this.establishConnection(win);
+            }
 
-                    this.retrieveManifest();
+        const newSocket = new net.Socket();
+        newSocket.on('close', close);
+        this.client = new PromiseSocket(newSocket);
 
-                    this.retriveManifestTimer = setInterval(() => {
-                        console.log("retrive manifest");
-                        this.manifestStr = '';
+        // Connect API V2
+        this.connect(this.client, this.ipAddress, 10112).then(async () => {
+            // get manifest
+            this.client.stream.on('data', chunk => {
+                if (this.isGettingManifestDone || chunk.length < 12) return;
+                if (chunk.slice(0, 4).equals(Buffer.from([0xff, 0xff, 0xff, 0xff]))) {
+                    this.manifestStr += this.parseResponseByType(chunk.slice(12), 4);
+                    this.totalManifestLen = parseInt(chunk.slice(8, 12).toString('hex').match(/.{2}/g).reverse().join(""), 16);
+                } else {
+                    if (this.totalManifestLen === 0) {
                         this.totalManifestLen = 0;
                         this.curManifestLen = 0;
                         this.isGettingManifestDone = false;
                         this.retrieveManifest();
-                    }, 30000);
-                }.bind(this)).catch((reason) => {
-                    this.connected = false;
-                    error(reason);
-                })
-            }
-        }.bind(this));
+                        return;
+                    }
+                    this.manifestStr += this.parseResponseByType(chunk, 4);
+                }
+                this.curManifestLen += chunk.length;
+                this.isGettingManifestDone = true;
+                for (let i in actionCmdList) {
+                    console.log(actionCmdList[i], this.manifestStr.includes(actionCmdList[i]));
+                    if (!this.manifestStr.includes(actionCmdList[i])) {
+                        this.isGettingManifestDone = false;
+                        break;
+                    }
+                }
+                if (!this.isGettingManifestDone && (this.curManifestLen - 12) >= this.totalManifestLen) {
+                    this.totalManifestLen = 0;
+                    this.curManifestLen = 0;
+                    this.isGettingManifestDone = false;
+                    this.retrieveManifest();
+                    return;
+                }
+                if (this.isGettingManifestDone) {
+                    // call generate cmdList fn
+                    console.log('done');
+                    this.generateCmdList();
+                    if (this.isFirstTimeGettingManifest) {
+                        this.connected = true;
+                        success();
+                        this.isFirstTimeGettingManifest = false;
+                    }
+                }
+            })
+
+            this.retrieveManifest();
+
+            this.retriveManifestTimer = setInterval(() => {
+                console.log("retrive manifest");
+                this.manifestStr = '';
+                this.totalManifestLen = 0;
+                this.curManifestLen = 0;
+                this.isGettingManifestDone = false;
+                this.retrieveManifest();
+            }, 30000);
+        }).catch((reason) => {
+            this.connected = false;
+            error(reason);
+        })
     }
 
     generateCmdList() {

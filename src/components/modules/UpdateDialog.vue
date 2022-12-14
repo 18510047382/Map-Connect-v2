@@ -1,6 +1,6 @@
 <template>
     <v-dialog v-model="show" width="600" persistent>
-        <v-card class="update-dialog-card" style="user-select: none;">
+        <v-card style="user-select: none;">
             <v-card-title class="text-h5">
                 Update notice - {{ version }}
             </v-card-title>

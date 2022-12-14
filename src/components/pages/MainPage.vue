@@ -1,6 +1,14 @@
 <template>
     <v-container style="user-select: none;">
+        <EnterIPDialog ref="EnterIPDialog" />
+
         <v-row class="mt-10 mb-5">
+            <v-btn v-if="status === 0 && !isConnectToIP.confirm" absolute right top depressed color="#607d8b" style="color: white;" @click="enterIP">
+                Enter IP
+                <v-icon dark right>
+                    mdi-wifi
+                </v-icon>
+            </v-btn>
             <v-col>
                 <v-img src="./../../assets/images/logo sq.png" contain height="200" />
             </v-col>
@@ -26,7 +34,7 @@
             <v-col v-if="status === 2" class="text-center">
                 <v-avatar color="red" size="32"></v-avatar>
                 <span style="position: relative; top: 9px; left: 10px;" class="display-1">
-                     An error occurred
+                    An error occurred
                 </span>
             </v-col>
         </v-row>
@@ -39,7 +47,9 @@
                     Infinite Flight settings.
                     <br>
                     <br>
-                    <b>If this is your first time using Map Connect v2, check out our tutorial <span style="color: #80DEEA; cursor: pointer;" @click="$emit('changePage', 'tutorial')">HERE</span></b>
+                    <b>If this is your first time using Map Connect v2, check out our tutorial <span
+                            style="color: #80DEEA; cursor: pointer;"
+                            @click="$emit('changePage', 'tutorial')">HERE</span></b>
                 </v-alert>
             </v-col>
 
@@ -49,7 +59,8 @@
                     Congratulations, Map Connect has successfully connected to Infinite Flight!
                     <br>
                     <br>
-                    <b>During the flight, please keep the focus of the computer in the Map Connect window and do not close the window.</b>
+                    <b>During the flight, please keep the focus of the computer in the Map Connect window and do not
+                        close the window.</b>
                 </v-alert>
             </v-col>
 
@@ -67,8 +78,27 @@
 </template>
 
 <script>
+import EnterIPDialog from './../modules/EnterIPDialog';
+
 export default {
     name: "MainPage",
-    props: ['status', 'errMsg']
+    props: ['status', 'errMsg'],
+
+    components: {
+        EnterIPDialog
+    },
+
+    data: () => ({
+        isConnectToIP: window.isConnectToIP
+    }),
+
+    methods: {
+        enterIP() {
+            this.$refs.EnterIPDialog.open();
+        },
+        cdsa() {
+            console.log(11)
+        }
+    }
 }
 </script>
